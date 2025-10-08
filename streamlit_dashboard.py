@@ -414,6 +414,53 @@ def main():
     st.dataframe(styled_df, use_container_width=True, hide_index=True)
     # 차트 섹션 제거: 단순 테이블 중심 UI
 
+    # 과거 차트 섹션
+    st.divider()
+    st.subheader("📉 과거 차트 (10년 / 5년 / 3년)")
+
+    @st.cache_data(ttl=600)
+    def fetch_history(symbol: str, years: int) -> pd.DataFrame:
+        start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        # 여유를 두기 위해 +30일
+        start = start.replace(year=start.year)  # no-op; keep explicit
+        try:
+            df = yf.Ticker(symbol).history(period=f"{years}y")
+            if df is None or df.empty:
+                # period가 실패하면 수동 기간으로 재시도
+                from datetime import timedelta
+                df = yf.Ticker(symbol).history(start=datetime.now() - timedelta(days=365*years+30))
+        except Exception:
+            df = pd.DataFrame()
+        return df
+
+    def render_history_tab(years: int):
+        cols = st.columns(2)
+        idx = 0
+        for key, info in TICKER_MAP.items():
+            hist_df = fetch_history(info['symbol'], years)
+            with cols[idx % 2]:
+                if hist_df is None or hist_df.empty or 'Close' not in hist_df.columns:
+                    st.warning(f"{info['name']} ({info['ticker']}) 데이터 없음")
+                else:
+                    import plotly.express as px
+                    fig = px.line(
+                        hist_df.reset_index(), x='Date', y='Close',
+                        title=f"{info['name']} ({info['ticker']}) - {years}년"
+                    )
+                    fig.update_layout(height=300, margin=dict(l=10, r=10, t=40, b=10))
+                    if info['symbol'] == '^TNX':
+                        fig.update_yaxes(title_text='Yield (%)')
+                    st.plotly_chart(fig, use_container_width=True)
+            idx += 1
+
+    tab10, tab5, tab3 = st.tabs(["10년", "5년", "3년"])
+    with tab10:
+        render_history_tab(10)
+    with tab5:
+        render_history_tab(5)
+    with tab3:
+        render_history_tab(3)
+
     # Gemini 해석 섹션
     st.divider()
     st.subheader("🧠 Gemini 해석 (정성적 리스크 코멘트)")
