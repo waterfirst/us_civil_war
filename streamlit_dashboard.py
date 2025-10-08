@@ -4,6 +4,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 from typing import Optional
 import time
+import numpy as np
 
 # 페이지 설정
 st.set_page_config(
@@ -66,16 +67,23 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # 지수 데이터 설정
+# 지수 데이터 설정
 TICKER_MAP = {
     'gold': {'symbol': 'GC=F', 'name': '금 (Gold)', 'ticker': 'XAU/USD'},
     'silver': {'symbol': 'SI=F', 'name': '은 (Silver)', 'ticker': 'XAG/USD'},
     'dxy': {'symbol': 'DX-Y.NYB', 'name': '달러 지수 (DXY)', 'ticker': 'DXY'},
     'us10y': {'symbol': '^TNX', 'name': '미 10년물 채권', 'ticker': 'US10Y'},
     'btc': {'symbol': 'BTC-USD', 'name': '비트코인', 'ticker': 'BTC/USD'},
-    'skew': {'symbol': '^SKEW', 'name': '블랙스완 지수', 'ticker': 'SKEW'},
+    'krwjpy': {'symbol': 'KRWJPY=X', 'name': '원-엔 환율', 'ticker': 'KRW/JPY'},
+    'krwusd': {'symbol': 'KRW=X', 'name': '원-달러 환율', 'ticker': 'USD/KRW'},
+    'usdjpy': {'symbol': 'JPY=X', 'name': '달러-엔 환율', 'ticker': 'USD/JPY'},
     'vix': {'symbol': '^VIX', 'name': '변동성 지수 (VIX)', 'ticker': 'VIX'},
     'spx': {'symbol': '^GSPC', 'name': 'S&P 500', 'ticker': 'S&P 500'},
 }
+
+
+
+
 
 def get_unit(symbol):
     """심볼에 따른 단위 반환"""
@@ -174,7 +182,14 @@ def compute_risk_signal(market_data):
     score = 0
     factors = []
 
+    # 기본 지수들
     vix = get_item(market_data, 'vix')
+    dxy = get_item(market_data, 'dxy')
+    usdjpy = get_item(market_data, 'usdjpy')
+    krwusd = get_item(market_data, 'krwusd')
+    krwjpy = get_item(market_data, 'krwjpy')
+
+    # VIX 분석
     if vix and vix['current_value']:
         vix_level = vix['current_value']
         if vix_level > 35:
@@ -184,22 +199,75 @@ def compute_risk_signal(market_data):
         elif vix_level > 15:
             score += 1; factors.append(f"VIX 다소 높음 ({vix_level:.1f}) +1")
 
-    skew = get_item(market_data, 'skew')
-    if skew and skew['current_value']:
-        skew_level = skew['current_value']
-        if skew_level > 150:
-            score += 2; factors.append(f"SKEW 매우 높음 ({skew_level:.0f}) +2")
-        elif skew_level > 140:
-            score += 1; factors.append(f"SKEW 높음 ({skew_level:.0f}) +1")
-
-    dxy = get_item(market_data, 'dxy')
+    # 달러 지수 분석
     if dxy:
         dxy_chg = dxy['change_pct']
+        dxy_level = dxy['current_value']
+        
         if dxy_chg > 1.0:
             score += 2; factors.append(f"달러지수 급등 ({dxy_chg:+.2f}%) +2")
         elif dxy_chg > 0.5:
             score += 1; factors.append(f"달러지수 상승 ({dxy_chg:+.2f}%) +1")
+        
+        # 달러지수 절대 수준도 고려 (105 이상이면 강세)
+        if dxy_level > 110:
+            score += 2; factors.append(f"달러 매우 강세 ({dxy_level:.1f}) +2")
+        elif dxy_level > 105:
+            score += 1; factors.append(f"달러 강세 ({dxy_level:.1f}) +1")
 
+    # 크로스 환율 분석: 달러 강세 시 원화 vs 엔화 약세 비교
+    if dxy and krwusd and usdjpy and krwjpy:
+        dxy_chg = dxy['change_pct']
+        krwusd_chg = krwusd['change_pct']
+        usdjpy_chg = usdjpy['change_pct']
+        krwjpy_chg = krwjpy['change_pct']
+        
+        # 달러 강세 시 원화가 엔화보다 더 약세인 경우 (원-엔 하락)
+        if dxy_chg > 0.5 and krwjpy_chg < -1.0:
+            score += 2; factors.append(f"달러 강세 시 원화 상대적 급락 ({krwjpy_chg:+.2f}%) +2")
+        elif dxy_chg > 0.3 and krwjpy_chg < -0.5:
+            score += 1; factors.append(f"달러 강세 시 원화 상대적 약세 ({krwjpy_chg:+.2f}%) +1")
+        
+        # 달러 약세 시 원화가 엔화보다 덜 강세인 경우 (원-엔 하락)
+        if dxy_chg < -0.5 and krwjpy_chg < -1.0:
+            score += 1; factors.append(f"달러 약세에도 원화 부진 ({krwjpy_chg:+.2f}%) +1")
+
+    # 원-달러 환율 분석
+    if krwusd:
+        krwusd_chg = krwusd['change_pct']
+        if krwusd_chg > 2.0:
+            score += 3; factors.append(f"원화 급락 대비 달러 ({krwusd_chg:+.2f}%) +3")
+        elif krwusd_chg > 1.0:
+            score += 2; factors.append(f"원화 약세 대비 달러 ({krwusd_chg:+.2f}%) +2")
+        elif krwusd_chg > 0.5:
+            score += 1; factors.append(f"원화 하락 대비 달러 ({krwusd_chg:+.2f}%) +1")
+        elif krwusd_chg < -2.0:
+            score += 2; factors.append(f"원화 급등 대비 달러 ({krwusd_chg:+.2f}%) +2")
+        elif krwusd_chg < -1.0:
+            score += 1; factors.append(f"원화 강세 대비 달러 ({krwusd_chg:+.2f}%) +1")
+
+    # 달러-엔 환율 분석 (캐리 트레이드 지표)
+    if usdjpy:
+        usdjpy_chg = usdjpy['change_pct']
+        if usdjpy_chg > 2.0:
+            score += 2; factors.append(f"엔화 급락 ({usdjpy_chg:+.2f}%) +2")
+        elif usdjpy_chg > 1.0:
+            score += 1; factors.append(f"엔화 약세 ({usdjpy_chg:+.2f}%) +1")
+        elif usdjpy_chg < -2.0:
+            score += 3; factors.append(f"엔화 급등, 캐리 청산 ({usdjpy_chg:+.2f}%) +3")
+        elif usdjpy_chg < -1.0:
+            score += 2; factors.append(f"엔화 강세 ({usdjpy_chg:+.2f}%) +2")
+
+    # 원-엔 환율 단독 분석 (한국 특화)
+    if krwjpy:
+        krwjpy_chg = krwjpy['change_pct']
+        # 원-엔 급락은 원화의 구조적 약세 신호
+        if krwjpy_chg < -2.0:
+            score += 2; factors.append(f"원화 구조적 약세 ({krwjpy_chg:+.2f}%) +2")
+        elif krwjpy_chg < -1.0:
+            score += 1; factors.append(f"원화 대비 엔화 강세 ({krwjpy_chg:+.2f}%) +1")
+
+    # 나머지 지표들...
     us10y = get_item(market_data, 'us10y')
     if us10y and us10y['current_value'] is not None and us10y['previous_value'] is not None:
         move_bp = abs(us10y['current_value'] - us10y['previous_value'])
@@ -248,7 +316,112 @@ def compute_risk_signal(market_data):
 
     return {'score': score, 'level': level, 'color': color, 'emoji': emoji, 'factors': factors}
 
- 
+
+
+def calculate_pair_trading_signals(market_data):
+    """페어 트레이딩 신호 계산"""
+    signals = {}
+    
+    # 1. 금-은 페어 트레이딩
+    gold = get_item(market_data, 'gold')
+    silver = get_item(market_data, 'silver')
+    
+    if gold and silver:
+        gold_value = gold['current_value']
+        silver_value = silver['current_value']
+        
+        # 금/은 비율 계산 (일반적으로 60-80 범위)
+        gold_silver_ratio = gold_value / silver_value if silver_value > 0 else 0
+        
+        # 역사적 평균 대비 판단 (일반적으로 70 전후)
+        if gold_silver_ratio > 85:
+            signal = '🟢 은 매수 / 금 매도'
+            color = '#28a745'
+            description = f'금은비율 {gold_silver_ratio:.1f} (높음 → 은 저평가)'
+        elif gold_silver_ratio < 65:
+            signal = '🔴 금 매수 / 은 매도'
+            color = '#dc3545'
+            description = f'금은비율 {gold_silver_ratio:.1f} (낮음 → 금 저평가)'
+        else:
+            signal = '🟡 중립'
+            color = '#ffc107'
+            description = f'금은비율 {gold_silver_ratio:.1f} (정상 범위)'
+        
+        signals['gold_silver'] = {
+            'signal': signal,
+            'color': color,
+            'description': description,
+            'ratio': gold_silver_ratio
+        }
+    
+    # 2. VIX 기반 채권-주식 페어 트레이딩
+    vix = get_item(market_data, 'vix')
+    us10y = get_item(market_data, 'us10y')
+    spx = get_item(market_data, 'spx')
+    
+    if vix:
+        vix_level = vix['current_value']
+        
+        if vix_level > 25:
+            signal = '🔴 채권 매도 / S&P500 매수'
+            color = '#dc3545'
+            description = f'VIX {vix_level:.1f} (고공포 → 주식 저평가)'
+        elif vix_level < 15:
+            signal = '🟢 채권 매수 / S&P500 매도'
+            color = '#28a745'
+            description = f'VIX {vix_level:.1f} (저공포 → 주식 고평가)'
+        else:
+            signal = '🟡 중립'
+            color = '#ffc107'
+            description = f'VIX {vix_level:.1f} (정상 범위)'
+        
+        signals['vix_bonds_stocks'] = {
+            'signal': signal,
+            'color': color,
+            'description': description,
+            'vix_level': vix_level
+        }
+    
+    # 3. 원화 기반 달러-엔 역페어 트레이딩
+    krwusd = get_item(market_data, 'krwusd')
+    usdjpy = get_item(market_data, 'usdjpy')
+    krwjpy = get_item(market_data, 'krwjpy')
+    
+    if krwusd and usdjpy and krwjpy:
+        krwusd_value = krwusd['current_value']
+        usdjpy_value = usdjpy['current_value']
+        krwjpy_value = krwjpy['current_value']
+        
+        # 이론적 KRW/JPY = (KRW/USD) / (JPY/USD) = USD/KRW * USD/JPY
+        # 실제로는 역수 관계이므로 조정 필요
+        theoretical_krwjpy = (krwusd_value / usdjpy_value) * 100 if usdjpy_value > 0 else 0
+        actual_krwjpy = krwjpy_value
+        
+        deviation = ((actual_krwjpy - theoretical_krwjpy) / theoretical_krwjpy * 100) if theoretical_krwjpy > 0 else 0
+        
+        # 달러와 엔 중 어느 것이 더 유리한지 판단
+        # KRW/JPY가 높으면 엔이 저평가, 낮으면 달러가 저평가
+        if deviation > 5 or krwjpy['change_pct'] > 1.5:
+            signal = '🟢 엔화 매수 / 달러 매도'
+            color = '#28a745'
+            description = f'원-엔 {krwjpy_value:.2f} (엔 저평가 {deviation:+.1f}%)'
+        elif deviation < -5 or krwjpy['change_pct'] < -1.5:
+            signal = '🔴 달러 매수 / 엔화 매도'
+            color = '#dc3545'
+            description = f'원-엔 {krwjpy_value:.2f} (달러 저평가 {deviation:+.1f}%)'
+        else:
+            signal = '🟡 중립'
+            color = '#ffc107'
+            description = f'원-엔 {krwjpy_value:.2f} (균형 상태)'
+        
+        signals['krw_usd_jpy'] = {
+            'signal': signal,
+            'color': color,
+            'description': description,
+            'deviation': deviation
+        }
+    
+    return signals
 
 
 def main():
@@ -317,35 +490,113 @@ def main():
     
     # 메인 데이터 테이블
     st.subheader("📊 상세 데이터")
-    
+
+    # 각 지수별 위험 신호 방향 정의
+    RISK_INDICATORS = {
+        'gold': 'up',      # 금 상승 = 위험 증가
+        'silver': 'up',    # 은 상승 = 위험 증가
+        'dxy': 'up',       # 달러지수 상승 = 위험 증가
+        'us10y': 'up',     # 채권 금리 상승 = 위험 증가
+        'btc': 'up',       # 비트코인 상승 = 위험 증가
+        'krwjpy': 'down',  # 원-엔 하락 = 원화 약세 = 위험 증가
+        'krwusd': 'up',    # 원-달러 상승 = 원화 약세 = 위험 증가
+        'usdjpy': 'both',  # 달러-엔은 급변동 자체가 위험
+        'vix': 'up',       # VIX 상승 = 위험 증가
+        'spx': 'down',     # S&P500 하락 = 위험 증가
+    }
+
     # 데이터프레임 생성
     df_data = []
     for item in market_data:
+        risk_direction = RISK_INDICATORS.get(item['id'], 'neutral')
+        
+        # 위험도에 따른 상태 결정
+        if item['status'] == '안정':
+            risk_status = '중립'
+            risk_color = 'neutral'
+        elif item['status'] == '상승':
+            if risk_direction == 'up':
+                risk_status = '위험↑'
+                risk_color = 'danger'
+            elif risk_direction == 'down':
+                risk_status = '안전↑'
+                risk_color = 'safe'
+            else:  # both
+                if abs(item['change_pct']) > 1.5:
+                    risk_status = '위험↑'
+                    risk_color = 'danger'
+                else:
+                    risk_status = '변동↑'
+                    risk_color = 'neutral'
+        else:  # 하락
+            if risk_direction == 'up':
+                risk_status = '안전↓'
+                risk_color = 'safe'
+            elif risk_direction == 'down':
+                risk_status = '위험↓'
+                risk_color = 'danger'
+            else:  # both
+                if abs(item['change_pct']) > 1.5:
+                    risk_status = '위험↓'
+                    risk_color = 'danger'
+                else:
+                    risk_status = '변동↓'
+                    risk_color = 'neutral'
+        
         df_data.append({
             '지수명': item['name'],
             '심볼': item['ticker'],
             '현재가': item['formatted_value'],
             '변화율': f"{item['change_pct']:+.2f}%",
-            '상태': item['status'],
+            '상태': risk_status,
+            '_상태색상': risk_color,  # 숨겨진 컬럼
             '업데이트': datetime.now().strftime('%H:%M:%S')
         })
-    
+
     df = pd.DataFrame(df_data)
-    
-    # 테이블 스타일링
-    def style_status(val):
-        if val == '안정':
-            return 'background-color: #d4edda; color: #155724'
-        elif val == '상승':
-            return 'background-color: #cce5ff; color: #004085'
-        elif val == '하락':
-            return 'background-color: #f8d7da; color: #721c24'
-        else:
-            return 'background-color: #f8d7da; color: #721c24'
-    
-    styled_df = df.style.applymap(style_status, subset=['상태'])
+
+    # 상태 색상 매핑 딕셔너리 생성
+    status_color_map = dict(zip(df['상태'], df['_상태색상']))
+
+    # 테이블 스타일링 함수
+    def style_status_cell(val):
+        """상태 셀 스타일링"""
+        color = status_color_map.get(val, 'neutral')
+        if color == 'danger':
+            return 'background-color: #dc3545; color: white; font-weight: bold'
+        elif color == 'safe':
+            return 'background-color: #007bff; color: white; font-weight: bold'
+        else:  # neutral
+            return 'background-color: #6c757d; color: white'
+
+    def style_change_cell(val):
+        """변화율 셀 스타일링"""
+        if isinstance(val, str):
+            if val.startswith('+'):
+                return 'color: #28a745; font-weight: bold'
+            elif val.startswith('-'):
+                return 'color: #dc3545; font-weight: bold'
+        return ''
+
+    # 숨겨진 컬럼 제거하고 스타일 적용
+    display_df = df.drop('_상태색상', axis=1)
+    styled_df = display_df.style.applymap(
+        style_status_cell, subset=['상태']
+    ).applymap(
+        style_change_cell, subset=['변화율']
+    )
+
     st.dataframe(styled_df, use_container_width=True, hide_index=True)
-    # 차트 섹션 제거: 단순 테이블 중심 UI
+
+    # 범례 추가
+    st.caption("""
+    **상태 색상 의미:**  
+    🔴 **빨강 (위험)** = 미국 내전 위험도 증가 신호 | 
+    🔵 **파랑 (안전)** = 미국 내전 위험도 감소 신호 | 
+    ⚪ **회색 (중립)** = 안정 또는 영향 미미
+    """)
+
+
 
     # 과거 차트 섹션
     st.divider()
@@ -433,9 +684,14 @@ def main():
         import plotly.graph_objects as go
         # 하이라이트 선택 컨트롤
         highlight_options = [v['name'] for v in all_hist.values()]
-        selected_highlights = st.multiselect("하이라이트 지수 선택 (선택 시 나머지는 회색 처리)", options=highlight_options, default=[])
+        selected_highlights = st.multiselect(
+            "하이라이트 지수 선택 (선택 시 나머지는 회색 처리)", 
+            options=highlight_options, 
+            default=[]
+        )
 
         fig_all = go.Figure()
+        
         # 날짜 범위가 서로 다를 수 있으므로 각 시리즈 자체 x를 사용해 trace 추가
         for key, item in all_hist.items():
             s = item['series']
@@ -446,17 +702,129 @@ def main():
                     y=s.values,
                     mode='lines',
                     name=item['name'],
-                    line=dict(color='#cccccc', width=1) if is_dimmed else None,
+                    line=dict(
+                        color='#cccccc' if is_dimmed else None, 
+                        width=1 if is_dimmed else 2
+                    ),
                     opacity=0.3 if is_dimmed else 1.0,
+                    hovertemplate='<b>%{fullData.name}</b><br>' +
+                                '날짜: %{x|%Y-%m-%d}<br>' +
+                                '지수: %{y:.2f}<br>' +
+                                '<extra></extra>'
                 )
             )
+        
         fig_all.update_layout(
             height=420,
             margin=dict(l=10, r=10, t=30, b=10),
             yaxis_title='Rebased (Start=100)',
-            legend_title_text='지수'
+            legend_title_text='지수',
+            # 크로스헤어 활성화
+            hovermode='x unified',  # x축 기준으로 모든 시리즈의 값 표시
+            hoverdistance=100,
+            spikedistance=1000,
+            # 세로선 추가
+            xaxis=dict(
+                showspikes=True,  # 세로선 활성화
+                spikemode='across',  # 차트 전체를 가로지름
+                spikesnap='cursor',  # 커서 위치에 정확히 표시
+                spikecolor='rgba(255, 255, 0, 0.8)',  # 선 색상
+                spikethickness=1,  # 선 두께
+                spikedash='dot'  # 점선 스타일
+            ),
+            # 가로선 추가
+            yaxis=dict(
+                showspikes=True,  # 가로선 활성화
+                spikemode='across',
+                spikesnap='cursor',
+                spikecolor='rgba(255, 255, 25, 0.5)',
+                spikethickness=1,
+                spikedash='dot'
+            )
         )
+        
         st.plotly_chart(fig_all, use_container_width=True)
+        
+        # 사용 팁 추가
+        st.info("💡 **사용 팁**: 차트 위에 마우스를 올리면 세로선/가로선이 표시되며, 모든 지수의 해당 시점 값을 동시에 확인할 수 있습니다.")
+
+
+
+    
+    st.divider()
+    
+    # ===== 페어 트레이딩 신호등 섹션 추가 =====
+    st.subheader("💱 페어 트레이딩 신호등")
+    
+    pair_signals = calculate_pair_trading_signals(market_data)
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        if 'gold_silver' in pair_signals:
+            gs = pair_signals['gold_silver']
+            st.markdown(
+                f"""
+                <div style="background:{gs['color']}; color:white; padding:12px; border-radius:8px; margin-bottom:10px;">
+                    <h4 style="margin:0; color:white;">금-은 페어</h4>
+                    <p style="margin:5px 0; font-size:1.1rem;">{gs['signal']}</p>
+                    <p style="margin:0; font-size:0.9rem; opacity:0.9;">{gs['description']}</p>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+    
+    with col2:
+        if 'vix_bonds_stocks' in pair_signals:
+            vbs = pair_signals['vix_bonds_stocks']
+            st.markdown(
+                f"""
+                <div style="background:{vbs['color']}; color:white; padding:12px; border-radius:8px; margin-bottom:10px;">
+                    <h4 style="margin:0; color:white;">VIX 채권-주식</h4>
+                    <p style="margin:5px 0; font-size:1.1rem;">{vbs['signal']}</p>
+                    <p style="margin:0; font-size:0.9rem; opacity:0.9;">{vbs['description']}</p>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+    
+    with col3:
+        if 'krw_usd_jpy' in pair_signals:
+            kuj = pair_signals['krw_usd_jpy']
+            st.markdown(
+                f"""
+                <div style="background:{kuj['color']}; color:white; padding:12px; border-radius:8px; margin-bottom:10px;">
+                    <h4 style="margin:0; color:white;">원화 달러-엔 역페어</h4>
+                    <p style="margin:5px 0; font-size:1.1rem;">{kuj['signal']}</p>
+                    <p style="margin:0; font-size:0.9rem; opacity:0.9;">{kuj['description']}</p>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+    
+    # 페어 트레이딩 설명
+    with st.expander("📚 페어 트레이딩 전략 설명", expanded=False):
+        st.markdown("""
+        ### 1. 금-은 페어 트레이딩
+        - **금은비율 (Gold/Silver Ratio)**: 금 1온스로 은을 몇 온스 살 수 있는지
+        - **정상 범위**: 65-85 (역사적 평균 ~70)
+        - **85 이상**: 은이 저평가 → 은 매수 / 금 매도
+        - **65 이하**: 금이 저평가 → 금 매수 / 은 매도
+        
+        ### 2. VIX 기반 채권-주식 페어
+        - **VIX > 25**: 공포 지수 높음 → 주식 저평가 (주식 매수 기회)
+        - **VIX < 15**: 공포 지수 낮음 → 주식 고평가 (채권으로 이동)
+        - **역발상 전략**: 공포가 클 때 주식 매수
+        
+        ### 3. 원화 기반 달러-엔 역페어
+        - **원-엔 환율 급등**: 엔이 상대적으로 저평가 → 엔화 매수
+        - **원-엔 환율 급락**: 달러가 상대적으로 저평가 → 달러 매수
+        - **원화를 기준**으로 달러와 엔 중 어느 것이 더 유리한지 판단
+        """)
+    
+    st.divider()
+
+
 
     # 하단 정보
     st.divider()
