@@ -1,8 +1,9 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
+import time
 
 # 페이지 설정
 st.set_page_config(
@@ -258,12 +259,22 @@ def main():
     with st.sidebar:
         st.header("⚙️ 설정")
         if st.button("🔄 데이터 새로고침"):
+            # 데이터 새로고침 시작 시간 기록
+            st.session_state['refresh_started_at'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             st.cache_data.clear()
             st.rerun()
+        # 단일 차트 시작일 선택
+        default_start = (datetime.now() - timedelta(days=365)).date()
+        single_chart_start = st.date_input("단일 차트 시작일", value=default_start)
     
     # 데이터 가져오기
     with st.spinner("시장 데이터를 가져오는 중..."):
+        t0 = time.perf_counter()
         market_data = fetch_market_data()
+        t1 = time.perf_counter()
+        # 데이터 로드 완료 시간 기록
+        st.session_state['refresh_finished_at'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        st.session_state['refresh_elapsed_sec'] = round(t1 - t0, 2)
     
     # 신호등 계산 및 표시
     risk = compute_risk_signal(market_data)
@@ -356,12 +367,17 @@ def main():
         return df
 
     def render_history_tab(years: int):
+        # 모든 심볼의 히스토리를 먼저 가져온 뒤 그립니다 (로딩 에러 방지)
+        with st.spinner(f"{years}년 데이터 불러오는 중..."):
+            history_map = {}
+            for key, info in TICKER_MAP.items():
+                history_map[key] = fetch_history(info['symbol'], years)
         cols = st.columns(2)
         idx = 0
         for key, info in TICKER_MAP.items():
-            hist_df = fetch_history(info['symbol'], years)
+            hist_df = history_map.get(key)
             with cols[idx % 2]:
-                if hist_df is None or hist_df.empty or 'Close' not in hist_df.columns:
+                if hist_df is None or hist_df.empty or 'Close' not in getattr(hist_df, 'columns', []):
                     st.warning(f"{info['name']} ({info['ticker']}) 데이터 없음")
                 else:
                     import plotly.express as px
@@ -385,10 +401,81 @@ def main():
     
     # 하단 정보
     st.divider()
+    # 전체 지수 합산 차트 (사용자 지정 시작일, 기준=100)
+    st.subheader("🧩 모든 모니터링 지수: 단일 차트 (기준=100)")
+
+    @st.cache_data(ttl=600)
+    def fetch_all_history_rebased_from(start_date):
+        result = {}
+        for key, info in TICKER_MAP.items():
+            try:
+                h = yf.Ticker(info['symbol']).history(start=start_date)
+                if h is None or h.empty or 'Close' not in h.columns:
+                    continue
+                base = h['Close'].iloc[0]
+                if base and base != 0:
+                    rebased = (h['Close'] / base) * 100.0
+                    result[key] = {
+                        'name': info['name'],
+                        'ticker': info['ticker'],
+                        'series': rebased
+                    }
+            except Exception:
+                continue
+        return result
+
+    with st.spinner("모든 지수 히스토리 로딩 중..."):
+        all_hist = fetch_all_history_rebased_from(single_chart_start)
+
+    if not all_hist:
+        st.warning("모든 지수 히스토리를 불러오지 못했습니다.")
+    else:
+        import plotly.graph_objects as go
+        # 하이라이트 선택 컨트롤
+        highlight_options = [v['name'] for v in all_hist.values()]
+        selected_highlights = st.multiselect("하이라이트 지수 선택 (선택 시 나머지는 회색 처리)", options=highlight_options, default=[])
+
+        fig_all = go.Figure()
+        # 날짜 범위가 서로 다를 수 있으므로 각 시리즈 자체 x를 사용해 trace 추가
+        for key, item in all_hist.items():
+            s = item['series']
+            is_dimmed = len(selected_highlights) > 0 and item['name'] not in selected_highlights
+            fig_all.add_trace(
+                go.Scatter(
+                    x=s.index,
+                    y=s.values,
+                    mode='lines',
+                    name=item['name'],
+                    line=dict(color='#cccccc', width=1) if is_dimmed else None,
+                    opacity=0.3 if is_dimmed else 1.0,
+                )
+            )
+        fig_all.update_layout(
+            height=420,
+            margin=dict(l=10, r=10, t=30, b=10),
+            yaxis_title='Rebased (Start=100)',
+            legend_title_text='지수'
+        )
+        st.plotly_chart(fig_all, use_container_width=True)
+
+    # 하단 정보
+    st.divider()
     col1, col2 = st.columns(2)
     
     with col1:
-        st.info(f"🕐 마지막 업데이트: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        # 로드 타이밍 정보 표시
+        started = st.session_state.get('refresh_started_at')
+        finished = st.session_state.get('refresh_finished_at')
+        elapsed = st.session_state.get('refresh_elapsed_sec')
+        timing = []
+        if started:
+            timing.append(f"시작: {started}")
+        if finished:
+            timing.append(f"완료: {finished}")
+        if elapsed is not None:
+            timing.append(f"소요: {elapsed}s")
+        timing_text = " | ".join(timing) if timing else datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        st.info(f"🕐 데이터 로드 타이밍: {timing_text}")
     with col2:
         st.info("📡 데이터 소스: Yahoo Finance")
 
