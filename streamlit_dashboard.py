@@ -2,14 +2,7 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 from datetime import datetime
-import os
 from typing import Optional
-
-try:
-    import google.generativeai as genai
-    _HAS_GEMINI = True
-except Exception:
-    _HAS_GEMINI = False
 
 # 페이지 설정
 st.set_page_config(
@@ -80,13 +73,14 @@ TICKER_MAP = {
     'btc': {'symbol': 'BTC-USD', 'name': '비트코인', 'ticker': 'BTC/USD'},
     'skew': {'symbol': '^SKEW', 'name': '블랙스완 지수', 'ticker': 'SKEW'},
     'vix': {'symbol': '^VIX', 'name': '변동성 지수 (VIX)', 'ticker': 'VIX'},
+    'spx': {'symbol': '^GSPC', 'name': 'S&P 500', 'ticker': 'S&P 500'},
 }
 
 def get_unit(symbol):
     """심볼에 따른 단위 반환"""
     if symbol in ['^TNX']:
         return 'percentage'
-    elif symbol in ['DX-Y.NYB', '^SKEW', '^VIX']:
+    elif symbol in ['DX-Y.NYB', '^SKEW', '^VIX', '^GSPC']:
         return 'points'
     return 'currency'
 
@@ -253,61 +247,7 @@ def compute_risk_signal(market_data):
 
     return {'score': score, 'level': level, 'color': color, 'emoji': emoji, 'factors': factors}
 
-def _format_snapshot_for_prompt(market_data, risk):
-    lines = []
-    lines.append("[현재 지수 스냅샷]")
-    for item in market_data:
-        lines.append(
-            f"- {item['name']} ({item['ticker']}): 현재 {item['formatted_value']}, 변화율 {item['change_pct']:+.2f}%"
-        )
-    lines.append("")
-    lines.append(
-        f"[휴리스틱 위험도] 수준={risk['level']}, 점수={risk['score']}, 요인={'; '.join(risk['factors']) if risk['factors'] else '없음'}"
-    )
-    return "\n".join(lines)
-
-def analyze_with_gemini(api_key: str, market_data, risk, model_name: Optional[str] = None) -> Optional[str]:
-    if not _HAS_GEMINI:
-        return "google-generativeai 패키지가 설치되어 있지 않습니다. 'pip install google-generativeai'로 설치하세요."
-    if not api_key:
-        return None
-    try:
-        genai.configure(api_key=api_key)
-        # 일부 환경에서는 -latest 접미사가 404를 유발할 수 있어 기본값을 고정 버전으로 사용
-        model_id = model_name or "gemini-1.5-flash"
-        try:
-            model = genai.GenerativeModel(model_id)
-        except Exception:
-            # 호환 모델 폴백
-            for fallback in ["gemini-1.5-pro", "gemini-1.5-flash-8b", "gemini-1.0-pro"]:
-                try:
-                    model = genai.GenerativeModel(fallback)
-                    model_id = fallback
-                    break
-                except Exception:
-                    model = None
-            if model is None:
-                return f"Gemini 모델 초기화 실패 (시도한 모델: {model_id})."
-        snapshot = _format_snapshot_for_prompt(market_data, risk)
-        system_prompt = (
-            "당신은 거시/시장 리스크 분석가입니다. 아래 지표와 휴리스틱 위험도를 참고해 "
-            "향후 수일~수주의 미국 내 정치적 불안(예: 사회적 갈등 격화)과 경제 변동(변동성 확대, 레버리지 축소) 가능성을 "
-            "보수적으로 해석하세요. 과도한 확신을 피하고, 데이터 한계를 명시하며, 관찰 가능한 신호와 조건부 시나리오로 답하세요.\n\n"
-        )
-        user_prompt = (
-            f"입력 데이터:\n{snapshot}\n\n"
-            "요구사항:\n"
-            "1) 신호의 강/중/약 근거를 항목별로 정리\n"
-            "2) 단기(1주) / 단중기(2~4주) 시나리오 범위 제시\n"
-            "3) 리스크 완화/확대 트리거 3~5개\n"
-            "4) 포트폴리오 차원에서의 일반적 유의점(투자자문 아님)\n"
-            "5) 데이터/모델 한계와 불확실성 명시"
-        )
-        prompt = system_prompt + user_prompt
-        resp = model.generate_content(prompt)
-        return getattr(resp, 'text', None) or (resp.candidates[0].content.parts[0].text if getattr(resp, 'candidates', None) else None)
-    except Exception as e:
-        return f"Gemini 호출 오류: {e}"
+ 
 
 
 def main():
@@ -320,24 +260,6 @@ def main():
         if st.button("🔄 데이터 새로고침"):
             st.cache_data.clear()
             st.rerun()
-        st.divider()
-        st.header("🧠 Gemini 설정")
-        try:
-            default_key = st.secrets.get('google_api_key', '')
-        except Exception:
-            default_key = ''
-        user_key = st.text_input("Google API Key", value=default_key, type="password", placeholder="AIza...")
-        model_choice = st.selectbox(
-            "Gemini 모델",
-            options=[
-                "gemini-1.5-flash",
-                "gemini-1.5-pro",
-                "gemini-1.5-flash-8b",
-                "gemini-1.0-pro"
-            ],
-            index=0
-        )
-        run_ai = st.button("🤖 Gemini 해석 실행")
     
     # 데이터 가져오기
     with st.spinner("시장 데이터를 가져오는 중..."):
@@ -416,7 +338,7 @@ def main():
 
     # 과거 차트 섹션
     st.divider()
-    st.subheader("📉 과거 차트 (10년 / 5년 / 3년)")
+    st.subheader("📉 과거 차트 (5년 / 3년)")
 
     @st.cache_data(ttl=600)
     def fetch_history(symbol: str, years: int) -> pd.DataFrame:
@@ -453,35 +375,13 @@ def main():
                     st.plotly_chart(fig, use_container_width=True)
             idx += 1
 
-    tab10, tab5, tab3 = st.tabs(["10년", "5년", "3년"])
-    with tab10:
-        render_history_tab(10)
+    tab5, tab3 = st.tabs(["5년", "3년"])
     with tab5:
         render_history_tab(5)
     with tab3:
         render_history_tab(3)
 
-    # Gemini 해석 섹션
-    st.divider()
-    st.subheader("🧠 Gemini 해석 (정성적 리스크 코멘트)")
-    if 'run_ai' not in st.session_state:
-        st.session_state.run_ai = False
-    # 버튼은 사이드바에 있으므로, 그 신호를 받아서 실행
-    try:
-        triggered = run_ai
-    except NameError:
-        triggered = False
-    if triggered:
-        with st.spinner("Gemini로 해석 중..."):
-            try:
-                ai_text = analyze_with_gemini(user_key, market_data, risk, model_choice)
-            except Exception as _:
-                ai_text = "Gemini 분석 실행 중 오류가 발생했습니다."
-        if ai_text:
-            st.write(ai_text)
-        else:
-            st.warning("API Key를 입력하거나, 'pip install google-generativeai'로 패키지를 설치하세요.")
-    st.caption("본 해석은 정보 제공용이며, 투자/정치적 의사결정에 대한 조언이 아닙니다.")
+    
     
     # 하단 정보
     st.divider()
