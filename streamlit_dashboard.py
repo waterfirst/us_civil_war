@@ -77,9 +77,9 @@ TICKER_MAP = {
     'krwjpy': {'symbol': 'KRWJPY=X', 'name': '원-엔 환율', 'ticker': 'KRW/JPY'},
     'krwusd': {'symbol': 'KRW=X', 'name': '원-달러 환율', 'ticker': 'USD/KRW'},
     'usdjpy': {'symbol': 'JPY=X', 'name': '달러-엔 환율', 'ticker': 'USD/JPY'},
-    'vix': {'symbol': '^VIX', 'name': '변동성 지수 (VIX)', 'ticker': 'VIX'},
     'spx': {'symbol': '^GSPC', 'name': 'S&P 500', 'ticker': 'S&P 500'},
     'ndx': {'symbol': '^NDX', 'name': '나스닥 100', 'ticker': 'NASDAQ 100'},
+    'vix': {'symbol': '^VIX', 'name': '변동성 지수 (VIX)', 'ticker': 'VIX'},
 }
 
 
@@ -356,9 +356,8 @@ def compute_risk_signal(market_data):
     return {'score': score, 'level': level, 'color': color, 'emoji': emoji, 'factors': factors}
 
 
-
 def calculate_pair_trading_signals(market_data):
-    """페어 트레이딩 신호 계산"""
+    """페어 트레이딩 신호 계산 (5단계)"""
     signals = {}
     
     # 1. 금-은 페어 트레이딩
@@ -369,88 +368,129 @@ def calculate_pair_trading_signals(market_data):
         gold_value = gold['current_value']
         silver_value = silver['current_value']
         
-        # 금/은 비율 계산 (일반적으로 60-80 범위)
+        # 금/은 비율 계산
         gold_silver_ratio = gold_value / silver_value if silver_value > 0 else 0
         
-        # 역사적 평균 대비 판단 (일반적으로 70 전후)
-        if gold_silver_ratio > 85:
+        # 5단계 신호 (역사적 범위: 60-90)
+        if gold_silver_ratio > 90:
+            signal = '🟢🟢 은 강력매수 / 금 강력매도'
+            color = '#00aa00'
+            level = 'strong_buy'
+            description = f'금은비율 {gold_silver_ratio:.1f} (매우 높음 → 은 심각한 저평가)'
+        elif gold_silver_ratio > 82:
             signal = '🟢 은 매수 / 금 매도'
             color = '#28a745'
+            level = 'buy'
             description = f'금은비율 {gold_silver_ratio:.1f} (높음 → 은 저평가)'
-        elif gold_silver_ratio < 65:
+        elif gold_silver_ratio < 60:
+            signal = '🔴🔴 금 강력매수 / 은 강력매도'
+            color = '#cc0000'
+            level = 'strong_sell'
+            description = f'금은비율 {gold_silver_ratio:.1f} (매우 낮음 → 금 심각한 저평가)'
+        elif gold_silver_ratio < 68:
             signal = '🔴 금 매수 / 은 매도'
             color = '#dc3545'
+            level = 'sell'
             description = f'금은비율 {gold_silver_ratio:.1f} (낮음 → 금 저평가)'
         else:
             signal = '🟡 중립'
             color = '#ffc107'
-            description = f'금은비율 {gold_silver_ratio:.1f} (정상 범위)'
+            level = 'neutral'
+            description = f'금은비율 {gold_silver_ratio:.1f} (정상 범위 68-82)'
         
         signals['gold_silver'] = {
             'signal': signal,
             'color': color,
+            'level': level,
             'description': description,
             'ratio': gold_silver_ratio
         }
     
     # 2. VIX 기반 채권-주식 페어 트레이딩
     vix = get_item(market_data, 'vix')
-    us10y = get_item(market_data, 'us10y')
-    spx = get_item(market_data, 'spx')
     
     if vix:
         vix_level = vix['current_value']
+        vix_chg = vix.get('change_pct', 0)
         
-        if vix_level > 25:
-            signal = '🔴 채권 매도 / S&P500 매수'
+        # 5단계 신호
+        if vix_level > 35 or (vix_level > 30 and vix_chg > 10):
+            signal = '🔴🔴 주식 강력매수 / 채권 강력매도'
+            color = '#cc0000'
+            level = 'strong_buy_stocks'
+            description = f'VIX {vix_level:.1f} (극도의 공포 → 주식 바닥 근접)'
+        elif vix_level > 25 or (vix_level > 22 and vix_chg > 5):
+            signal = '🔴 주식 매수 / 채권 매도'
             color = '#dc3545'
-            description = f'VIX {vix_level:.1f} (고공포 → 주식 저평가)'
+            level = 'buy_stocks'
+            description = f'VIX {vix_level:.1f} (높은 공포 → 주식 저평가)'
+        elif vix_level < 12:
+            signal = '🟢🟢 채권 강력매수 / 주식 강력매도'
+            color = '#00aa00'
+            level = 'strong_sell_stocks'
+            description = f'VIX {vix_level:.1f} (극도의 낙관 → 주식 고평가)'
         elif vix_level < 15:
-            signal = '🟢 채권 매수 / S&P500 매도'
+            signal = '🟢 채권 매수 / 주식 매도'
             color = '#28a745'
-            description = f'VIX {vix_level:.1f} (저공포 → 주식 고평가)'
+            level = 'sell_stocks'
+            description = f'VIX {vix_level:.1f} (낮은 공포 → 주식 고평가)'
         else:
             signal = '🟡 중립'
             color = '#ffc107'
-            description = f'VIX {vix_level:.1f} (정상 범위)'
+            level = 'neutral'
+            description = f'VIX {vix_level:.1f} (정상 범위 15-25)'
         
         signals['vix_bonds_stocks'] = {
             'signal': signal,
             'color': color,
+            'level': level,
             'description': description,
             'vix_level': vix_level
         }
-
+    
     # 3. 달러-엔 캐리 트레이드
     usdjpy = get_item(market_data, 'usdjpy')
-
+    
     if usdjpy:
         usdjpy_value = usdjpy['current_value']
         usdjpy_chg = usdjpy['change_pct']
         
-        # 140-160 범위 기준 (2022-2025 관찰)
-        if usdjpy_value > 155 or (usdjpy_value > 150 and usdjpy_chg > 1.5):
+        # 5단계 신호 (역사적 범위: 100-160)
+        if usdjpy_value > 160 or (usdjpy_value > 155 and usdjpy_chg > 2):
+            signal = '🟢🟢 엔화 강력매수 / 달러 강력매도'
+            color = '#00aa00'
+            level = 'strong_buy_jpy'
+            description = f'USD/JPY {usdjpy_value:.2f} (엔화 극도의 약세 → 반등 임박)'
+        elif usdjpy_value > 152 or (usdjpy_value > 148 and usdjpy_chg > 1):
             signal = '🟢 엔화 매수 / 달러 매도'
             color = '#28a745'
+            level = 'buy_jpy'
             description = f'USD/JPY {usdjpy_value:.2f} (엔화 과도한 약세)'
-        elif usdjpy_value < 140 or (usdjpy_value < 145 and usdjpy_chg < -1.5):
+        elif usdjpy_value < 135 or (usdjpy_value < 140 and usdjpy_chg < -2):
+            signal = '🔴🔴 달러 강력매수 / 엔화 강력매도'
+            color = '#cc0000'
+            level = 'strong_sell_jpy'
+            description = f'USD/JPY {usdjpy_value:.2f} (엔화 극도의 강세 → 캐리 청산 완료)'
+        elif usdjpy_value < 142 or (usdjpy_value < 145 and usdjpy_chg < -1):
             signal = '🔴 달러 매수 / 엔화 매도'
             color = '#dc3545'
-            description = f'USD/JPY {usdjpy_value:.2f} (엔화 과도한 강세, 캐리 청산 위험)'
+            level = 'sell_jpy'
+            description = f'USD/JPY {usdjpy_value:.2f} (엔화 과도한 강세 → 캐리 청산 위험)'
         else:
             signal = '🟡 중립'
             color = '#ffc107'
-            description = f'USD/JPY {usdjpy_value:.2f} (정상 범위)'
+            level = 'neutral'
+            description = f'USD/JPY {usdjpy_value:.2f} (정상 범위 142-152)'
         
         signals['usd_jpy'] = {
             'signal': signal,
             'color': color,
+            'level': level,
             'description': description,
             'usdjpy_value': usdjpy_value
         }
     
-
-     # 4. S&P 500 - 나스닥 100 페어 트레이딩 (신규 추가)
+    # 4. S&P 500 - 나스닥 100 페어 트레이딩
     spx = get_item(market_data, 'spx')
     ndx = get_item(market_data, 'ndx')
     
@@ -461,29 +501,42 @@ def calculate_pair_trading_signals(market_data):
         # 성과 차이 계산
         performance_gap = ndx_chg - spx_chg
         
-        # 나스닥이 S&P보다 강하면 기술주 강세
-        if performance_gap > 1.5:
-            signal = '🟢 나스닥 매도 / S&P 매수'
+        # 5단계 신호
+        if performance_gap > 3.0:
+            signal = '🟢🟢 S&P 강력매수 / 나스닥 강력매도'
+            color = '#00aa00'
+            level = 'strong_buy_spx'
+            description = f'격차 {performance_gap:+.2f}%p (기술주 극도 과열 → S&P 심각한 저평가)'
+        elif performance_gap > 1.5:
+            signal = '🟢 S&P 매수 / 나스닥 매도'
             color = '#28a745'
+            level = 'buy_spx'
             description = f'격차 {performance_gap:+.2f}%p (기술주 과열 → S&P 저평가)'
+        elif performance_gap < -3.0:
+            signal = '🔴🔴 나스닥 강력매수 / S&P 강력매도'
+            color = '#cc0000'
+            level = 'strong_buy_ndx'
+            description = f'격차 {performance_gap:+.2f}%p (기술주 극도 약세 → 나스닥 심각한 저평가)'
         elif performance_gap < -1.5:
-            signal = '🔴 S&P 매도 / 나스닥 매수'
+            signal = '🔴 나스닥 매수 / S&P 매도'
             color = '#dc3545'
+            level = 'buy_ndx'
             description = f'격차 {performance_gap:+.2f}%p (기술주 약세 → 나스닥 저평가)'
         else:
             signal = '🟡 중립'
             color = '#ffc107'
-            description = f'격차 {performance_gap:+.2f}%p (균형 상태)'
+            level = 'neutral'
+            description = f'격차 {performance_gap:+.2f}%p (균형 범위 -1.5 ~ +1.5%p)'
         
         signals['spx_ndx'] = {
             'signal': signal,
             'color': color,
+            'level': level,
             'description': description,
             'performance_gap': performance_gap
         }
     
     return signals
-
 
 
 def main():
@@ -499,7 +552,7 @@ def main():
             st.cache_data.clear()
             st.rerun()
         # 단일 차트 시작일 선택
-        default_start = (datetime.now() - timedelta(days=365)).date()
+        default_start = (datetime.now() - timedelta(days=365*2)).date()
         single_chart_start = st.date_input("단일 차트 시작일", value=default_start)
     
     # 데이터 가져오기
@@ -665,7 +718,7 @@ def main():
     st.divider()
     st.subheader("📉 과거 차트 (5년 / 3년)")
 
-    @st.cache_data(ttl=600)
+    @st.cache_data(ttl=1200)
     def fetch_history(symbol: str, years: int) -> pd.DataFrame:
         start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
         # 여유를 두기 위해 +30일
@@ -816,12 +869,12 @@ def main():
     
     st.divider()
     
-    # ===== 페어 트레이딩 신호등 섹션 추가 =====
-    st.subheader("💱 페어 트레이딩 신호등")
-    
+    # ===== 페어 트레이딩 신호등 섹션 =====
+    st.subheader("💱 페어 트레이딩 신호등 (5단계)")
+
     pair_signals = calculate_pair_trading_signals(market_data)
-    
-    # 2x2 그리드로 변경
+
+    # 2x2 그리드
     col1, col2 = st.columns(2)
 
     with col1:
@@ -830,10 +883,10 @@ def main():
             gs = pair_signals['gold_silver']
             st.markdown(
                 f"""
-                <div style="background:{gs['color']}; color:white; padding:12px; border-radius:8px; margin-bottom:10px;">
-                    <h4 style="margin:0; color:white;">금-은 페어</h4>
-                    <p style="margin:5px 0; font-size:1.1rem;">{gs['signal']}</p>
-                    <p style="margin:0; font-size:0.9rem; opacity:0.9;">{gs['description']}</p>
+                <div style="background:{gs['color']}; color:white; padding:12px; border-radius:8px; margin-bottom:10px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                    <h4 style="margin:0; color:white;">💰 금-은 페어</h4>
+                    <p style="margin:8px 0; font-size:1.15rem; font-weight:bold;">{gs['signal']}</p>
+                    <p style="margin:0; font-size:0.9rem; opacity:0.95;">{gs['description']}</p>
                 </div>
                 """,
                 unsafe_allow_html=True
@@ -844,74 +897,122 @@ def main():
             vbs = pair_signals['vix_bonds_stocks']
             st.markdown(
                 f"""
-                <div style="background:{vbs['color']}; color:white; padding:12px; border-radius:8px; margin-bottom:10px;">
-                    <h4 style="margin:0; color:white;">VIX 채권-주식</h4>
-                    <p style="margin:5px 0; font-size:1.1rem;">{vbs['signal']}</p>
-                    <p style="margin:0; font-size:0.9rem; opacity:0.9;">{vbs['description']}</p>
+                <div style="background:{vbs['color']}; color:white; padding:12px; border-radius:8px; margin-bottom:10px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                    <h4 style="margin:0; color:white;">📊 VIX 채권-주식</h4>
+                    <p style="margin:8px 0; font-size:1.15rem; font-weight:bold;">{vbs['signal']}</p>
+                    <p style="margin:0; font-size:0.9rem; opacity:0.95;">{vbs['description']}</p>
                 </div>
                 """,
                 unsafe_allow_html=True
             )
 
     with col2:
-        # 달러-엔 캐리 트레이드 (수정)
+        # 달러-엔 캐리 트레이드
         if 'usd_jpy' in pair_signals:
             uj = pair_signals['usd_jpy']
             st.markdown(
                 f"""
-                <div style="background:{uj['color']}; color:white; padding:12px; border-radius:8px; margin-bottom:10px;">
-                    <h4 style="margin:0; color:white;">달러-엔 캐리</h4>
-                    <p style="margin:5px 0; font-size:1.1rem;">{uj['signal']}</p>
-                    <p style="margin:0; font-size:0.9rem; opacity:0.9;">{uj['description']}</p>
+                <div style="background:{uj['color']}; color:white; padding:12px; border-radius:8px; margin-bottom:10px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                    <h4 style="margin:0; color:white;">💴 달러-엔 캐리</h4>
+                    <p style="margin:8px 0; font-size:1.15rem; font-weight:bold;">{uj['signal']}</p>
+                    <p style="margin:0; font-size:0.9rem; opacity:0.95;">{uj['description']}</p>
                 </div>
                 """,
                 unsafe_allow_html=True
             )
         
-        # S&P-나스닥 페어 (신규)
+        # S&P-나스닥 페어
         if 'spx_ndx' in pair_signals:
             sn = pair_signals['spx_ndx']
             st.markdown(
                 f"""
-                <div style="background:{sn['color']}; color:white; padding:12px; border-radius:8px; margin-bottom:10px;">
-                    <h4 style="margin:0; color:white;">S&P-나스닥 페어</h4>
-                    <p style="margin:5px 0; font-size:1.1rem;">{sn['signal']}</p>
-                    <p style="margin:0; font-size:0.9rem; opacity:0.9;">{sn['description']}</p>
+                <div style="background:{sn['color']}; color:white; padding:12px; border-radius:8px; margin-bottom:10px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                    <h4 style="margin:0; color:white;">📈 S&P-나스닥 페어</h4>
+                    <p style="margin:8px 0; font-size:1.15rem; font-weight:bold;">{sn['signal']}</p>
+                    <p style="margin:0; font-size:0.9rem; opacity:0.95;">{sn['description']}</p>
                 </div>
                 """,
                 unsafe_allow_html=True
             )
 
+    # 신호 강도 요약
+    st.markdown("---")
+    col1, col2, col3, col4, col5 = st.columns(5)
+
+    signal_counts = {
+        'strong_buy': 0,
+        'buy': 0,
+        'neutral': 0,
+        'sell': 0,
+        'strong_sell': 0
+    }
+
+    for signal_data in pair_signals.values():
+        level = signal_data.get('level', 'neutral')
+        if 'strong_buy' in level or 'strong_sell_stocks' in level or 'strong_buy_spx' in level:
+            signal_counts['strong_buy'] += 1
+        elif 'buy' in level and 'strong' not in level:
+            signal_counts['buy'] += 1
+        elif 'strong_sell' in level or 'strong_buy_ndx' in level:
+            signal_counts['strong_sell'] += 1
+        elif 'sell' in level and 'strong' not in level:
+            signal_counts['sell'] += 1
+        else:
+            signal_counts['neutral'] += 1
+
+    with col1:
+        st.metric("🟢🟢 강력매수", signal_counts['strong_buy'])
+    with col2:
+        st.metric("🟢 매수", signal_counts['buy'])
+    with col3:
+        st.metric("🟡 중립", signal_counts['neutral'])
+    with col4:
+        st.metric("🔴 매도", signal_counts['sell'])
+    with col5:
+        st.metric("🔴🔴 강력매도", signal_counts['strong_sell'])
+
     # 페어 트레이딩 설명 업데이트
-    with st.expander("📚 페어 트레이딩 전략 설명", expanded=False):
+    with st.expander("📚 페어 트레이딩 5단계 전략 설명", expanded=False):
         st.markdown("""
+        ## 신호 단계 설명
+        
+        - 🟢🟢 **강력매수**: 극단적 저평가, 높은 확신도
+        - 🟢 **매수**: 명확한 저평가 신호
+        - 🟡 **중립**: 정상 범위, 대기
+        - 🔴 **매도**: 명확한 고평가 신호
+        - 🔴🔴 **강력매도**: 극단적 고평가, 높은 확신도
+        
+        ---
+        
         ### 1. 금-은 페어 트레이딩
-        - **금은비율 (Gold/Silver Ratio)**: 금 1온스로 은을 몇 온스 살 수 있는지
-        - **정상 범위**: 65-85 (역사적 평균 ~70)
-        - **85 이상**: 은이 저평가 → 은 매수 / 금 매도
-        - **65 이하**: 금이 저평가 → 금 매수 / 은 매도
+        - **🟢🟢 강력**: 금은비율 > 90 또는 < 60
+        - **🟢/🔴 일반**: 금은비율 82-90 또는 60-68
+        - **🟡 중립**: 금은비율 68-82 (정상)
+        - **역사적 평균**: 약 75
         
-        ### 2. VIX 기반 채권-주식 페어
-        - **VIX > 25**: 공포 지수 높음 → 주식 저평가 (주식 매수 기회)
-        - **VIX < 15**: 공포 지수 낮음 → 주식 고평가 (채권으로 이동)
-        - **역발상 전략**: 공포가 클 때 주식 매수
+        ### 2. VIX 채권-주식 페어
+        - **🟢🟢 주식 강력매수**: VIX > 35 (극도의 공포)
+        - **🟢 주식 매수**: VIX 25-35 (높은 공포)
+        - **🟡 중립**: VIX 15-25 (정상)
+        - **🔴 주식 매도**: VIX 12-15 (낮은 공포)
+        - **🔴🔴 주식 강력매도**: VIX < 12 (극도의 낙관)
         
-        ### 3. 달러-엔 캐리 트레이드 ⭐
-        - **USD/JPY > 155**: 엔화 과도한 약세 → 엔화 매수 / 달러 매도
-        - **USD/JPY < 140**: 엔화 과도한 강세 → 달러 매수 / 엔화 매도
-        - **캐리 트레이드**: 저금리 엔화 차입 → 고금리 자산 투자
-        - **급변동 시 위험**: 엔화 급등 시 캐리 청산으로 시장 충격
+        ### 3. 달러-엔 캐리 트레이드
+        - **🟢🟢 엔화 강력매수**: USD/JPY > 160 (엔화 극약세)
+        - **🟢 엔화 매수**: USD/JPY 152-160
+        - **🟡 중립**: USD/JPY 142-152 (정상)
+        - **🔴 달러 매수**: USD/JPY 135-142
+        - **🔴🔴 달러 강력매수**: USD/JPY < 135 (캐리 청산 완료)
         
-        ### 4. S&P 500 - 나스닥 100 페어 ⭐
-        - **나스닥 > S&P (+1.5%p 이상)**: 기술주 과열 → S&P 매수 / 나스닥 매도
-        - **S&P > 나스닥 (+1.5%p 이상)**: 기술주 약세 → 나스닥 매수 / S&P 매도
-        - **평균 회귀 전략**: 두 지수 간 격차가 벌어지면 좁혀질 것으로 예상
-        - **섹터 로테이션**: 기술주 vs 전통 산업 간 자금 이동 포착
+        ### 4. S&P-나스닥 페어
+        - **🟢🟢 S&P 강력매수**: 격차 > +3.0%p (기술주 극과열)
+        - **🟢 S&P 매수**: 격차 +1.5 ~ +3.0%p
+        - **🟡 중립**: 격차 -1.5 ~ +1.5%p (균형)
+        - **🔴 나스닥 매수**: 격차 -3.0 ~ -1.5%p
+        - **🔴🔴 나스닥 강력매수**: 격차 < -3.0%p (기술주 극약세)
         """)
 
-    
     st.divider()
-
 
 
     # 하단 정보
