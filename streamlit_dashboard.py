@@ -79,6 +79,7 @@ TICKER_MAP = {
     'usdjpy': {'symbol': 'JPY=X', 'name': '달러-엔 환율', 'ticker': 'USD/JPY'},
     'vix': {'symbol': '^VIX', 'name': '변동성 지수 (VIX)', 'ticker': 'VIX'},
     'spx': {'symbol': '^GSPC', 'name': 'S&P 500', 'ticker': 'S&P 500'},
+    'ndx': {'symbol': '^NDX', 'name': '나스닥 100', 'ticker': 'NASDAQ 100'},
 }
 
 
@@ -188,6 +189,44 @@ def compute_risk_signal(market_data):
     usdjpy = get_item(market_data, 'usdjpy')
     krwusd = get_item(market_data, 'krwusd')
     krwjpy = get_item(market_data, 'krwjpy')
+    spx = get_item(market_data, 'spx')
+    ndx = get_item(market_data, 'ndx')
+
+
+
+        # S&P 500 분석 (기존 코드 유지)
+    spx = get_item(market_data, 'spx')
+    if spx:
+        spx_chg = spx['change_pct']
+        if spx_chg < -3.0:
+            score += 3; factors.append(f"S&P500 급락 ({spx_chg:+.2f}%) +3")
+        elif spx_chg < -1.5:
+            score += 2; factors.append(f"S&P500 하락 ({spx_chg:+.2f}%) +2")
+        elif spx_chg < -0.5:
+            score += 1; factors.append(f"S&P500 약세 ({spx_chg:+.2f}%) +1")
+
+    # 나스닥 100 분석 추가
+    ndx = get_item(market_data, 'ndx')
+    if ndx:
+        ndx_chg = ndx['change_pct']
+        if ndx_chg < -3.0:
+            score += 3; factors.append(f"나스닥100 급락 ({ndx_chg:+.2f}%) +3")
+        elif ndx_chg < -1.5:
+            score += 2; factors.append(f"나스닥100 하락 ({ndx_chg:+.2f}%) +2")
+        elif ndx_chg < -0.5:
+            score += 1; factors.append(f"나스닥100 약세 ({ndx_chg:+.2f}%) +1")
+    
+    # S&P 500과 나스닥 100의 디버전스 체크 (추가 분석)
+    if spx and ndx:
+        spx_chg = spx['change_pct']
+        ndx_chg = ndx['change_pct']
+        divergence = abs(spx_chg - ndx_chg)
+        
+        # 두 지수가 2% 이상 다르게 움직이면 시장 불안정
+        if divergence > 2.0:
+            score += 2; factors.append(f"S&P-나스닥 디버전스 ({divergence:.2f}%p) +2")
+        elif divergence > 1.0:
+            score += 1; factors.append(f"지수 간 괴리 확대 ({divergence:.2f}%p) +1")
 
     # VIX 분석
     if vix and vix['current_value']:
@@ -381,47 +420,70 @@ def calculate_pair_trading_signals(market_data):
             'description': description,
             'vix_level': vix_level
         }
-    
-    # 3. 원화 기반 달러-엔 역페어 트레이딩
-    krwusd = get_item(market_data, 'krwusd')
+
+    # 3. 달러-엔 캐리 트레이드
     usdjpy = get_item(market_data, 'usdjpy')
-    krwjpy = get_item(market_data, 'krwjpy')
-    
-    if krwusd and usdjpy and krwjpy:
-        krwusd_value = krwusd['current_value']
+
+    if usdjpy:
         usdjpy_value = usdjpy['current_value']
-        krwjpy_value = krwjpy['current_value']
+        usdjpy_chg = usdjpy['change_pct']
         
-        # 이론적 KRW/JPY = (KRW/USD) / (JPY/USD) = USD/KRW * USD/JPY
-        # 실제로는 역수 관계이므로 조정 필요
-        theoretical_krwjpy = (krwusd_value / usdjpy_value) * 100 if usdjpy_value > 0 else 0
-        actual_krwjpy = krwjpy_value
-        
-        deviation = ((actual_krwjpy - theoretical_krwjpy) / theoretical_krwjpy * 100) if theoretical_krwjpy > 0 else 0
-        
-        # 달러와 엔 중 어느 것이 더 유리한지 판단
-        # KRW/JPY가 높으면 엔이 저평가, 낮으면 달러가 저평가
-        if deviation > 5 or krwjpy['change_pct'] > 1.5:
+        # 140-160 범위 기준 (2022-2025 관찰)
+        if usdjpy_value > 155 or (usdjpy_value > 150 and usdjpy_chg > 1.5):
             signal = '🟢 엔화 매수 / 달러 매도'
             color = '#28a745'
-            description = f'원-엔 {krwjpy_value:.2f} (엔 저평가 {deviation:+.1f}%)'
-        elif deviation < -5 or krwjpy['change_pct'] < -1.5:
+            description = f'USD/JPY {usdjpy_value:.2f} (엔화 과도한 약세)'
+        elif usdjpy_value < 140 or (usdjpy_value < 145 and usdjpy_chg < -1.5):
             signal = '🔴 달러 매수 / 엔화 매도'
             color = '#dc3545'
-            description = f'원-엔 {krwjpy_value:.2f} (달러 저평가 {deviation:+.1f}%)'
+            description = f'USD/JPY {usdjpy_value:.2f} (엔화 과도한 강세, 캐리 청산 위험)'
         else:
             signal = '🟡 중립'
             color = '#ffc107'
-            description = f'원-엔 {krwjpy_value:.2f} (균형 상태)'
+            description = f'USD/JPY {usdjpy_value:.2f} (정상 범위)'
         
-        signals['krw_usd_jpy'] = {
+        signals['usd_jpy'] = {
             'signal': signal,
             'color': color,
             'description': description,
-            'deviation': deviation
+            'usdjpy_value': usdjpy_value
+        }
+    
+
+     # 4. S&P 500 - 나스닥 100 페어 트레이딩 (신규 추가)
+    spx = get_item(market_data, 'spx')
+    ndx = get_item(market_data, 'ndx')
+    
+    if spx and ndx:
+        spx_chg = spx['change_pct']
+        ndx_chg = ndx['change_pct']
+        
+        # 성과 차이 계산
+        performance_gap = ndx_chg - spx_chg
+        
+        # 나스닥이 S&P보다 강하면 기술주 강세
+        if performance_gap > 1.5:
+            signal = '🟢 나스닥 매도 / S&P 매수'
+            color = '#28a745'
+            description = f'격차 {performance_gap:+.2f}%p (기술주 과열 → S&P 저평가)'
+        elif performance_gap < -1.5:
+            signal = '🔴 S&P 매도 / 나스닥 매수'
+            color = '#dc3545'
+            description = f'격차 {performance_gap:+.2f}%p (기술주 약세 → 나스닥 저평가)'
+        else:
+            signal = '🟡 중립'
+            color = '#ffc107'
+            description = f'격차 {performance_gap:+.2f}%p (균형 상태)'
+        
+        signals['spx_ndx'] = {
+            'signal': signal,
+            'color': color,
+            'description': description,
+            'performance_gap': performance_gap
         }
     
     return signals
+
 
 
 def main():
@@ -503,6 +565,7 @@ def main():
         'usdjpy': 'both',  # 달러-엔은 급변동 자체가 위험
         'vix': 'up',       # VIX 상승 = 위험 증가
         'spx': 'down',     # S&P500 하락 = 위험 증가
+        'ndx': 'down',     # 나스닥100 하락 = 위험 증가
     }
 
     # 데이터프레임 생성
@@ -758,9 +821,11 @@ def main():
     
     pair_signals = calculate_pair_trading_signals(market_data)
     
-    col1, col2, col3 = st.columns(3)
-    
+    # 2x2 그리드로 변경
+    col1, col2 = st.columns(2)
+
     with col1:
+        # 금-은 페어
         if 'gold_silver' in pair_signals:
             gs = pair_signals['gold_silver']
             st.markdown(
@@ -773,8 +838,8 @@ def main():
                 """,
                 unsafe_allow_html=True
             )
-    
-    with col2:
+        
+        # VIX 채권-주식 페어
         if 'vix_bonds_stocks' in pair_signals:
             vbs = pair_signals['vix_bonds_stocks']
             st.markdown(
@@ -787,22 +852,37 @@ def main():
                 """,
                 unsafe_allow_html=True
             )
-    
-    with col3:
-        if 'krw_usd_jpy' in pair_signals:
-            kuj = pair_signals['krw_usd_jpy']
+
+    with col2:
+        # 달러-엔 캐리 트레이드 (수정)
+        if 'usd_jpy' in pair_signals:
+            uj = pair_signals['usd_jpy']
             st.markdown(
                 f"""
-                <div style="background:{kuj['color']}; color:white; padding:12px; border-radius:8px; margin-bottom:10px;">
-                    <h4 style="margin:0; color:white;">원화 달러-엔 역페어</h4>
-                    <p style="margin:5px 0; font-size:1.1rem;">{kuj['signal']}</p>
-                    <p style="margin:0; font-size:0.9rem; opacity:0.9;">{kuj['description']}</p>
+                <div style="background:{uj['color']}; color:white; padding:12px; border-radius:8px; margin-bottom:10px;">
+                    <h4 style="margin:0; color:white;">달러-엔 캐리</h4>
+                    <p style="margin:5px 0; font-size:1.1rem;">{uj['signal']}</p>
+                    <p style="margin:0; font-size:0.9rem; opacity:0.9;">{uj['description']}</p>
                 </div>
                 """,
                 unsafe_allow_html=True
             )
-    
-    # 페어 트레이딩 설명
+        
+        # S&P-나스닥 페어 (신규)
+        if 'spx_ndx' in pair_signals:
+            sn = pair_signals['spx_ndx']
+            st.markdown(
+                f"""
+                <div style="background:{sn['color']}; color:white; padding:12px; border-radius:8px; margin-bottom:10px;">
+                    <h4 style="margin:0; color:white;">S&P-나스닥 페어</h4>
+                    <p style="margin:5px 0; font-size:1.1rem;">{sn['signal']}</p>
+                    <p style="margin:0; font-size:0.9rem; opacity:0.9;">{sn['description']}</p>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+
+    # 페어 트레이딩 설명 업데이트
     with st.expander("📚 페어 트레이딩 전략 설명", expanded=False):
         st.markdown("""
         ### 1. 금-은 페어 트레이딩
@@ -816,11 +896,19 @@ def main():
         - **VIX < 15**: 공포 지수 낮음 → 주식 고평가 (채권으로 이동)
         - **역발상 전략**: 공포가 클 때 주식 매수
         
-        ### 3. 원화 기반 달러-엔 역페어
-        - **원-엔 환율 급등**: 엔이 상대적으로 저평가 → 엔화 매수
-        - **원-엔 환율 급락**: 달러가 상대적으로 저평가 → 달러 매수
-        - **원화를 기준**으로 달러와 엔 중 어느 것이 더 유리한지 판단
+        ### 3. 달러-엔 캐리 트레이드 ⭐
+        - **USD/JPY > 155**: 엔화 과도한 약세 → 엔화 매수 / 달러 매도
+        - **USD/JPY < 140**: 엔화 과도한 강세 → 달러 매수 / 엔화 매도
+        - **캐리 트레이드**: 저금리 엔화 차입 → 고금리 자산 투자
+        - **급변동 시 위험**: 엔화 급등 시 캐리 청산으로 시장 충격
+        
+        ### 4. S&P 500 - 나스닥 100 페어 ⭐
+        - **나스닥 > S&P (+1.5%p 이상)**: 기술주 과열 → S&P 매수 / 나스닥 매도
+        - **S&P > 나스닥 (+1.5%p 이상)**: 기술주 약세 → 나스닥 매수 / S&P 매도
+        - **평균 회귀 전략**: 두 지수 간 격차가 벌어지면 좁혀질 것으로 예상
+        - **섹터 로테이션**: 기술주 vs 전통 산업 간 자금 이동 포착
         """)
+
     
     st.divider()
 
