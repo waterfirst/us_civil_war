@@ -2,6 +2,9 @@
 
 A lightweight Streamlit dashboard that monitors key market indices (Gold, Silver, DXY, US10Y, BTC, SKEW, VIX), computes a heuristic “risk traffic light” for potential U.S. instability/market turbulence, and optionally provides qualitative interpretation via Google Gemini.
 
+https://us-civil-war.streamlit.app/
+
+
 ## Features
 - Live data via Yahoo Finance (yfinance)
 - Simple risk traffic light from VIX/SKEW/DXY/US10Y/Gold/Silver/BTC
