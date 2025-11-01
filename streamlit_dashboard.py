@@ -66,11 +66,11 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# 지수 데이터 설정
-# 지수 데이터 설정
+# 지수 데이터 설정: 구리(Copper) 추가됨 (HG=F: Copper Futures)
 TICKER_MAP = {
     'gold': {'symbol': 'GC=F', 'name': '금 (Gold)', 'ticker': 'XAU/USD'},
     'silver': {'symbol': 'SI=F', 'name': '은 (Silver)', 'ticker': 'XAG/USD'},
+    'copper': {'symbol': 'HG=F', 'name': '구리 (Copper)', 'ticker': 'HG/USD'}, # 구리 추가
     'dxy': {'symbol': 'DX-Y.NYB', 'name': '달러 지수 (DXY)', 'ticker': 'DXY'},
     'us10y': {'symbol': '^TNX', 'name': '미 10년물 채권', 'ticker': 'US10Y'},
     'btc': {'symbol': 'BTC-USD', 'name': '비트코인', 'ticker': 'BTC/USD'},
@@ -81,9 +81,6 @@ TICKER_MAP = {
     'ndx': {'symbol': '^NDX', 'name': '나스닥 100', 'ticker': 'NASDAQ 100'},
     'vix': {'symbol': '^VIX', 'name': '변동성 지수 (VIX)', 'ticker': 'VIX'},
 }
-
-
-
 
 
 def get_unit(symbol):
@@ -137,6 +134,7 @@ def fetch_market_data():
                 change_pct = ((current_price - previous_price) / previous_price) * 100
             else:
                 current_price = hist['Close'].iloc[-1] if not hist.empty else 0
+                previous_price = current_price # Set previous to current if only one data point exists
                 change_pct = 0
             
             unit = get_unit(info['symbol'])
@@ -147,7 +145,7 @@ def fetch_market_data():
                 'name': info['name'],
                 'ticker': info['ticker'],
                 'current_value': current_price,
-                'previous_value': previous_price if len(hist) >= 2 else current_price,
+                'previous_value': previous_price,
                 'change_pct': change_pct,
                 'unit': unit,
                 'status': status,
@@ -156,7 +154,7 @@ def fetch_market_data():
             })
             
         except Exception as e:
-            st.error(f"Error fetching data for {info['name']}: {str(e)}")
+            # st.error(f"Error fetching data for {info['name']}: {str(e)}")
             data.append({
                 'id': key,
                 'name': info['name'],
@@ -183,18 +181,7 @@ def compute_risk_signal(market_data):
     score = 0
     factors = []
 
-    # 기본 지수들
-    vix = get_item(market_data, 'vix')
-    dxy = get_item(market_data, 'dxy')
-    usdjpy = get_item(market_data, 'usdjpy')
-    krwusd = get_item(market_data, 'krwusd')
-    krwjpy = get_item(market_data, 'krwjpy')
-    spx = get_item(market_data, 'spx')
-    ndx = get_item(market_data, 'ndx')
-
-
-
-        # S&P 500 분석 (기존 코드 유지)
+    # S&P 500 분석 (기존 코드 유지)
     spx = get_item(market_data, 'spx')
     if spx:
         spx_chg = spx['change_pct']
@@ -229,6 +216,7 @@ def compute_risk_signal(market_data):
             score += 1; factors.append(f"지수 간 괴리 확대 ({divergence:.2f}%p) +1")
 
     # VIX 분석
+    vix = get_item(market_data, 'vix')
     if vix and vix['current_value']:
         vix_level = vix['current_value']
         if vix_level > 35:
@@ -239,6 +227,7 @@ def compute_risk_signal(market_data):
             score += 1; factors.append(f"VIX 다소 높음 ({vix_level:.1f}) +1")
 
     # 달러 지수 분석
+    dxy = get_item(market_data, 'dxy')
     if dxy:
         dxy_chg = dxy['change_pct']
         dxy_level = dxy['current_value']
@@ -255,6 +244,9 @@ def compute_risk_signal(market_data):
             score += 1; factors.append(f"달러 강세 ({dxy_level:.1f}) +1")
 
     # 크로스 환율 분석: 달러 강세 시 원화 vs 엔화 약세 비교
+    krwusd = get_item(market_data, 'krwusd')
+    usdjpy = get_item(market_data, 'usdjpy')
+    krwjpy = get_item(market_data, 'krwjpy')
     if dxy and krwusd and usdjpy and krwjpy:
         dxy_chg = dxy['change_pct']
         krwusd_chg = krwusd['change_pct']
@@ -330,6 +322,20 @@ def compute_risk_signal(market_data):
             score += 2; factors.append(f"은 강세 ({schg:+.2f}%) +2")
         elif schg > 1.5:
             score += 1; factors.append(f"은 상승 ({schg:+.2f}%) +1")
+            
+    # 구리(Copper) 분석 추가 (경기 선행 지표)
+    copper = get_item(market_data, 'copper')
+    if copper:
+        cchg = copper['change_pct']
+        # 급격한 상승은 인플레이션 압력 또는 경기 과열 신호로 위험 점수 가산
+        if cchg > 3.0:
+            score += 2; factors.append(f"구리 급등 (경기 과열/인플레) ({cchg:+.2f}%) +2")
+        elif cchg > 1.5:
+            score += 1; factors.append(f"구리 상승 ({cchg:+.2f}%) +1")
+        # 급격한 하락은 경기 침체 우려 신호로 위험 점수 가산
+        elif cchg < -3.0:
+            score += 1; factors.append(f"구리 급락 (경기 침체 우려) ({cchg:+.2f}%) +1")
+
 
     btc = get_item(market_data, 'btc')
     if btc:
@@ -610,6 +616,7 @@ def main():
     RISK_INDICATORS = {
         'gold': 'up',      # 금 상승 = 위험 증가
         'silver': 'up',    # 은 상승 = 위험 증가
+        'copper': 'up',    # 구리 상승 = 위험 증가 (경기 과열/인플레)
         'dxy': 'up',       # 달러지수 상승 = 위험 증가
         'us10y': 'up',     # 채권 금리 상승 = 위험 증가
         'btc': 'up',       # 비트코인 상승 = 위험 증가
@@ -706,12 +713,10 @@ def main():
 
     # 범례 추가
     st.caption("""
-    **상태 색상 의미:**  
-    🔴 **빨강 (위험)** = 미국 내전 위험도 증가 신호 | 
+    **상태 색상 의미:** 🔴 **빨강 (위험)** = 미국 내전 위험도 증가 신호 | 
     🔵 **파랑 (안전)** = 미국 내전 위험도 감소 신호 | 
     ⚪ **회색 (중립)** = 안정 또는 영향 미미
     """)
-
 
 
     # 과거 차트 섹션
@@ -824,9 +829,9 @@ def main():
                     ),
                     opacity=0.3 if is_dimmed else 1.0,
                     hovertemplate='<b>%{fullData.name}</b><br>' +
-                                '날짜: %{x|%Y-%m-%d}<br>' +
-                                '지수: %{y:.2f}<br>' +
-                                '<extra></extra>'
+                                  '날짜: %{x|%Y-%m-%d}<br>' +
+                                  '지수: %{y:.2f}<br>' +
+                                  '<extra></extra>'
                 )
             )
         
@@ -863,7 +868,6 @@ def main():
         
         # 사용 팁 추가
         st.info("💡 **사용 팁**: 차트 위에 마우스를 올리면 세로선/가로선이 표시되며, 모든 지수의 해당 시점 값을 동시에 확인할 수 있습니다.")
-
 
 
     
